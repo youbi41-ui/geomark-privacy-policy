@@ -1,0 +1,14 @@
+{
+  "name": "GeoMark Web — GPS Camera for Field Inspection",
+  "short_name": "GeoMark",
+  "description": "Capture photos with GPS coordinates, date, time and address stamps for field inspection.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#05070b",
+  "theme_color": "#98002e",
+  "icons": [
+    {"src":"icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}
+  ]
+}
