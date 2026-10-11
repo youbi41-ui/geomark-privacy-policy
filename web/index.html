@@ -247,9 +247,46 @@
   async function reverseGeocode(){if(!loc)return;try{const u=`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(loc.latitude)}&lon=${encodeURIComponent(loc.longitude)}&zoom=18&addressdetails=1&accept-language=${settings.lang}`;const r=await fetch(u,{headers:{'Accept':'application/json'}});if(!r.ok)throw new Error('reverse geocode');const d=await r.json();address=d.display_name||'';renderStamp()}catch(e){console.warn(e);address='';renderStamp();toast(t('addressFailed'))}}
   function roundRect(ctx,x,y,w,h,r){r=Math.min(r,w/2,h/2);ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath()}
   function wrapCanvasText(ctx,text,maxWidth){const words=String(text).split(/\s+/), lines=[];let cur='';for(const word of words){const test=cur?cur+' '+word:word;if(ctx.measureText(test).width>maxWidth&&cur){lines.push(cur);cur=word}else cur=test}if(cur)lines.push(cur);return lines}
-  async function capture(){if(!stream||!els.video.videoWidth){toast(t('captureWait'));return}els.flash.classList.remove('go');void els.flash.offsetWidth;els.flash.classList.add('go');const v=els.video,c=els.canvas,ctx=c.getContext('2d');c.width=v.videoWidth;c.height=v.videoHeight;const sw=c.width/zoomFactor,sh=c.height/zoomFactor,sx=(c.width-sw)/2,sy=(c.height-sh)/2;if(facing==='user'){ctx.save();ctx.translate(c.width,0);ctx.scale(-1,1);ctx.drawImage(v,sx,sy,sw,sh,0,0,c.width,c.height);ctx.restore()}else ctx.drawImage(v,sx,sy,sw,sh,0,0,c.width,c.height);
-    const scale=Math.max(1,c.width/1080), pad=18*scale, font=20*scale, small=15*scale, maxW=Math.min(c.width*.88,720*scale);ctx.font=`600 ${font}px system-ui,Arial`;const raw=stampLines(), display=[];raw.forEach(line=>wrapCanvasText(ctx,line,maxW-pad*2).forEach(x=>display.push({text:x,small:false})));if(settings.brand)display.push({text:'GPS GeoMark | Capture | Stamp | Share',small:true});let h=pad*2;display.forEach(x=>h+=(x.small?small:font)*1.45);const x=24*scale,y=c.height-h-30*scale,w=maxW;ctx.fillStyle='rgba(0,0,0,.68)';roundRect(ctx,x,y,w,h,14*scale);ctx.fill();ctx.strokeStyle='rgba(255,255,255,.20)';ctx.lineWidth=1*scale;ctx.stroke();let ty=y+pad+font;for(const item of display){ctx.font=`${item.small?'800':'600'} ${item.small?small:font}px system-ui,Arial`;ctx.fillStyle=item.small?'#ff729f':'#ffffff';ctx.shadowColor='rgba(0,0,0,.7)';ctx.shadowBlur=2*scale;ctx.fillText(item.text,x+pad,ty);ty+=(item.small?small:font)*1.45}ctx.shadowBlur=0;
-    const blob=await new Promise(res=>c.toBlob(res,'image/jpeg',.93));const id=Date.now();await dbPut({id,blob,createdAt:new Date().toISOString(),lat:loc?.latitude||null,lon:loc?.longitude||null,address});toast(t('saved'));renderGallery()}
+  function drawPreviewStamp(ctx,canvas,stageRect,scaleX,scaleY){
+    const card=els.stampCard,cardRect=card.getBoundingClientRect(),cardStyle=getComputedStyle(card);
+    if(cardStyle.display==='none'||cardRect.width===0||cardRect.height===0)return;
+    const x=(cardRect.left-stageRect.left)*scaleX,y=(cardRect.top-stageRect.top)*scaleY,w=cardRect.width*scaleX,h=cardRect.height*scaleY;
+    const padL=parseFloat(cardStyle.paddingLeft)*scaleX,padR=parseFloat(cardStyle.paddingRight)*scaleX;
+    ctx.save();ctx.fillStyle=cardStyle.backgroundColor;roundRect(ctx,x,y,w,h,parseFloat(cardStyle.borderTopLeftRadius)*scaleX);ctx.fill();
+    ctx.strokeStyle=cardStyle.borderColor;ctx.lineWidth=Math.max(1,parseFloat(cardStyle.borderTopWidth)*scaleX);ctx.stroke();
+    const direction=getComputedStyle(document.documentElement).direction;ctx.direction=direction;
+    for(const el of card.querySelectorAll('.stamp-line,.stamp-brand')){
+      const rect=el.getBoundingClientRect(),style=getComputedStyle(el),fontSize=parseFloat(style.fontSize)*scaleY;
+      const lineHeight=(parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.45)*scaleY;
+      ctx.font=style.fontWeight+' '+fontSize+'px '+style.fontFamily;ctx.fillStyle=style.color;ctx.textBaseline='top';
+      ctx.textAlign=direction==='rtl'?'right':'left';
+      const tx=direction==='rtl'?x+w-padR:x+padL;
+      const text=style.textTransform==='uppercase'?el.textContent.toUpperCase():el.textContent;
+      const maxTextW=Math.max(20,w-padL-padR);
+      const lines=wrapCanvasText(ctx,text,maxTextW);
+      let ty=(rect.top-stageRect.top)*scaleY+Math.max(0,(lineHeight-fontSize)/2);
+      ctx.shadowColor='rgba(0,0,0,.7)';ctx.shadowBlur=2*scaleY;
+      for(const line of lines){ctx.fillText(line,tx,ty,maxTextW);ty+=lineHeight}
+    }
+    ctx.restore();
+  }
+  async function capture(){
+    if(!stream||!els.video.videoWidth){toast(t('captureWait'));return}
+    els.flash.classList.remove('go');void els.flash.offsetWidth;els.flash.classList.add('go');
+    const v=els.video,c=els.canvas,ctx=c.getContext('2d'),stageRect=els.cameraStage.getBoundingClientRect();
+    const previewRatio=stageRect.width/stageRect.height,sourceW=v.videoWidth,sourceH=v.videoHeight;
+    let cropW=sourceW,cropH=sourceH;
+    if(sourceW/sourceH>previewRatio)cropW=sourceH*previewRatio;else cropH=sourceW/previewRatio;
+    cropW/=zoomFactor;cropH/=zoomFactor;
+    const sx=(sourceW-cropW)/2,sy=(sourceH-cropH)/2;
+    c.width=Math.max(1,Math.round(cropW));c.height=Math.max(1,Math.round(cropH));
+    if(facing==='user'){ctx.save();ctx.translate(c.width,0);ctx.scale(-1,1);ctx.drawImage(v,sx,sy,cropW,cropH,0,0,c.width,c.height);ctx.restore()}
+    else ctx.drawImage(v,sx,sy,cropW,cropH,0,0,c.width,c.height);
+    drawPreviewStamp(ctx,c,stageRect,c.width/stageRect.width,c.height/stageRect.height);
+    const blob=await new Promise(res=>c.toBlob(res,'image/jpeg',.93));
+    const id=Date.now();await dbPut({id,blob,createdAt:new Date().toISOString(),lat:loc?.latitude||null,lon:loc?.longitude||null,address});
+    toast(t('saved'));renderGallery()
+  }
   function openDB(){return new Promise((resolve,reject)=>{const req=indexedDB.open('geomark-web',1);req.onupgradeneeded=()=>{const d=req.result;if(!d.objectStoreNames.contains('photos'))d.createObjectStore('photos',{keyPath:'id'})};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error)})}
   function dbPut(x){return new Promise((resolve,reject)=>{const tx=db.transaction('photos','readwrite');tx.objectStore('photos').put(x);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error)})}
   function dbAll(){return new Promise((resolve,reject)=>{const req=db.transaction('photos').objectStore('photos').getAll();req.onsuccess=()=>resolve(req.result.sort((a,b)=>b.id-a.id));req.onerror=()=>reject(req.error)})}
